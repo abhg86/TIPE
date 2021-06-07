@@ -1,0 +1,176 @@
+import numpy as np  # pour les matrices et les random
+from PIL import Image  # pour afficher l'image
+import cv2  # pour voir les animations en direct
+import matplotlib.pyplot as plt  # pour les graphes
+import pickle  # pour sauvegarder les tables
+from matplotlib import style  # pour les graphes
+
+
+style.use("ggplot")  # pour le style des graphes
+
+SIZE = 10
+
+HM_EPISODES = 20001
+SHOW_EVERY = 5000  # montre tous les combien d'épisodes
+
+
+MOVE_PENALTY = 1  # modifiable
+ENEMY_PENALTY = 300  # modifiable
+FOOD_REWARD = 25  # modifiable
+
+
+epsilon = 0.5  # à quel point c'est aléatoire
+EPS_DECAY = 0.9999  #  la raison de la decroissance du epsilon
+
+
+start_q_table = None  # mettre le nom du fichier de notre Q-table deja existente si il y en a une
+
+LEARNING_RATE = 0.1
+DISCOUNT = 0.95
+
+PLAYER_N = 1  # la clé du joueur dans le dictionnaire
+FOOD_N = 2  # la clé de la nourriture dans le dictionnaire
+ENEMY_N = 3  # la clé de l'ennemi dans le dictionnaire
+
+
+# le dictionnaire des couleurs
+d = {1: (255, 175, 0),  # bleu
+     2: (0, 255, 0),  # vert
+     3: (0, 0, 255)}  # rouge
+
+
+class Blob:
+    def __init__(self):
+        self.x = np.random.randint(0, SIZE)
+        self.y = np.random.randint(0, SIZE)
+
+    def __str__(self):
+        return f"{self.x}, {self.y}"
+
+    def __sub__(self, other):
+        return (self.x-other.x, self.y-other.y)
+
+    def action(self, choice):
+        '''
+        4 mouvements possibles. (0,1,2,3)
+        '''
+        if choice == 0:
+            self.x += 1
+
+        elif choice == 1:
+            self.x -= 1
+
+        elif choice == 2:
+            self.y += 1
+
+        elif choice == 3:
+            self.y -= 1
+
+
+        # si ça sort on rectifie
+        if self.x < 0:
+            self.x = 0
+        elif self.x > SIZE-1:
+            self.x = SIZE-1
+        if self.y < 0:
+            self.y = 0
+        elif self.y > SIZE-1:
+            self.y = SIZE-1
+
+
+if start_q_table is None:
+    # créer la table si elle n'existe pas
+    q_table = {}
+    for i in range(-SIZE+1, SIZE):
+        for ii in range(-SIZE+1, SIZE):
+            for iii in range(-SIZE+1, SIZE):
+                    for iiii in range(-SIZE+1, SIZE):
+                        q_table[((i, ii), (iii, iiii))] = [np.random.uniform(-5, 0) for i in range(4)]
+else:
+    with open(start_q_table, "rb") as f:
+        q_table = pickle.load(f)
+
+
+episode_rewards = []
+
+for episode in range(HM_EPISODES):
+    player = Blob()
+    food = Blob()
+    enemy = Blob()
+    if episode % SHOW_EVERY == 0:
+        print(f"à l'épisode #{episode}, epsilon = {epsilon}")
+        print(f"pour les {SHOW_EVERY} derniers episodes, récompense moyenne = {np.mean(episode_rewards[-SHOW_EVERY:])}")
+        show = True
+    else:
+        show = False
+
+    episode_reward = 0
+    for i in range(200):
+        obs = (player-food, player-enemy)
+        #print(obs)
+        if np.random.random() > epsilon:
+            # récupere l'action
+            action = np.argmax(q_table[obs])
+        else:
+            action = np.random.randint(0, 4)
+        # fait l'action
+        player.action(action)
+
+        # Au choix #
+        action2 = np.random.randint(0,4)
+        enemy.action(action2)
+        # action3 = np.random.randint(0,4)
+        # food.action(action3)
+
+
+        if player.x == enemy.x and player.y == enemy.y:
+            reward = -ENEMY_PENALTY
+        elif player.x == food.x and player.y == food.y:
+            reward = FOOD_REWARD
+        else:
+            reward = -MOVE_PENALTY
+
+        # on observe juste après l'action
+        new_obs = (player-food, player-enemy)
+        max_future_q = np.max(q_table[new_obs])
+        current_q = q_table[obs][action]
+
+        if reward == FOOD_REWARD:
+            new_q = FOOD_REWARD
+        else:
+            new_q = (1 - LEARNING_RATE) * current_q + LEARNING_RATE * (reward + DISCOUNT * max_future_q)
+        q_table[obs][action] = new_q
+
+        if show:
+            env = np.zeros((SIZE, SIZE, 3), dtype=np.uint8)  # crée une matrice de couleur pour afficher le jeu
+            env[food.x][food.y] = d[FOOD_N]  # rend la case de la nourriture verte
+            env[player.x][player.y] = d[PLAYER_N]  # rend la case du joueur bleu
+            env[enemy.x][enemy.y] = d[ENEMY_N]  # rend la case de l'ennemi rouge
+            img = Image.fromarray(env, 'RGB')  # transforme la matrice en image (petit problème : BGR au lieu de RGB
+            img = img.resize((500, 500),resample=Image.NEAREST)  # agrandit l'image
+            cv2.imshow("image", np.array(img))  # affiche
+            if reward == FOOD_REWARD or reward == -ENEMY_PENALTY:  # arrête si le jeu est fini
+                if cv2.waitKey(500) & 0xFF == ord('q'):
+                    break
+            else:
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+        episode_reward += reward
+        if reward == FOOD_REWARD or reward == -ENEMY_PENALTY:
+            break
+
+    #print(episode_reward)
+    episode_rewards.append(episode_reward)
+    epsilon *= EPS_DECAY
+
+
+moving_avg = np.convolve(episode_rewards, np.ones((SHOW_EVERY))/SHOW_EVERY, mode='valid')
+
+plt.plot([i for i in range(len(moving_avg))], moving_avg)
+plt.ylabel(f"Recompense")
+plt.xlabel("episode #")
+plt.show()
+
+with open('entr_bouge', 'wb') as f:
+    pickle.dump(q_table, f)
